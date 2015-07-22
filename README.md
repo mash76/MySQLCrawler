@@ -7,4 +7,4 @@ Getting Started
 
 $connStr1 = connection string
 
-## 2.run MySQLS¥Crawler.php
+## 2.run MySQLCrawler.php
