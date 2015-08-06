@@ -1,0 +1,15 @@
+body{font-size:small;color:#2a2a2a;}
+
+td{font-size:small;}
+th{font-size:small; font-weight:normal;color:DarkSlateGray;}
+
+.strbold{font-size:x-large;font-weight:bold;}
+.strHead{font-size:large;}
+
+a:link {color: #124488;text-decoration: none;}
+a:visited {color: #124488;text-decoration: none;}
+a:hover {color: #124488;text-decoration: underline;}
+
+input[type="submit"] {font-size:xx-large}
+
+.history{color:RoyalBlue;}

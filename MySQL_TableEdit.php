@@ -1,30 +1,28 @@
 <?
 session_start();
 include("ipcheck.php");//ip認証ログインチェック
+	
+//接続を切り替え
+if (isset($_REQUEST['conn_no'])) {
+	unset($_SESSION['mysql_current_db']);
+	$_SESSION['conn_no']=$_REQUEST['conn_no'];
+	$_SESSION['mysql_conn_str']=$connStrAry[$_REQUEST['conn_no']];
+	$_SESSION['mysql_current_db']=$_SESSION['mysql_conn_str']['db'];
+}
+if (isset($_SESSION['conn_no'])) $param_conn_no="&conn_no=".$_SESSION['conn_no'];
+
 $currentDB=$_SESSION['mysql_current_db'];
 
 //jQueryのjqModal()プラグインを利用してモダルダイアログを出してる
 
 //パラメータなければ終了
 if (!$_REQUEST['TABLE_NAME']) exit(strRed("set table name"));
-
 ?>
-<html>
-<head><title><?=$_REQUEST['TABLE_NAME']?>:<?=$_SESSION['mysql_current_db']?></title>
-<meta http-equiv="Content-Type" content="text/html; charset=shift_jis">
-<?
-$css="styleMac.css";
-if (preg_match("/Windows/i",$_SERVER['HTTP_USER_AGENT'])) $css="style.css";
-?>
-<link href='<?=$css?>' rel='stylesheet' type='text/css' />
-<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4/jquery.min.js"></script> 
-<script type="text/javascript" src="js/jqModal.js"></script> 
-<link rel="stylesheet" type="text/css" href="js/jqModal.css">
-</head>
+<? htmlHeader($_REQUEST['TABLE_NAME'].":".$_SESSION['mysql_current_db'],"utf-8");?>
 <body>
-←<a href="MySQLCrawler.php"><?=$connStr1['server']; ?> <? echodarkred($currentDB); ?></a><hr/>
+←<a href="MySQLCrawler.php?mode=<?=$param_conn_no?>"><?=$_SESSION['mysql_conn_str']['server']; ?> <? echo strDarkred($currentDB); ?></a><hr/>
 <? 
-if ($_REQUEST['TABLE_NAME']) $_SESSION['mysql_his_table'][$_REQUEST['TABLE_NAME']]='';
+if ($_REQUEST['TABLE_NAME']) $_SESSION['mysql_his_table'][$_REQUEST['TABLE_NAME']]++;
 
 //$connStr1=array('server'=>'127.0.0.1','db'=>'****','user'=>'****','pass'=>'*****');
 //$_SESSION['mysql_conn_str']があること前提
@@ -36,13 +34,13 @@ if ($_REQUEST['TABLE_SCHEMA']) {
 }
 
 //$connStr1=$_SESSION['mysql_conn_str'];
-$currentDB=$_SESSION['mysql_current_db'];
-$link = @mysql_connect($connStr1['server'],$connStr1['user'],$connStr1['pass']); //mysql接続
+$link = @mysql_connect($_SESSION['mysql_conn_str']['server'],$_SESSION['mysql_conn_str']['user'],$_SESSION['mysql_conn_str']['pass']) ; 
 sql2asc("use ".$currentDB,$link,false);
 sql2asc('set names utf8',$link,false);//文字コード整え
 
 
 //ワンタイムキーあれば更新SQL実行：reloadで繰り返される対策
+if (isset($_REQUEST['onetimekey']) && $_REQUEST['onetimekey']!=$_SESSION['onetimekey']) echo strRed("onetimekey fail<br/>");
 if ($_REQUEST['onetimekey']==$_SESSION['onetimekey']){
 
     if ($_REQUEST['sqltext']) sql2asc(addslashesMQuote($_REQUEST['sqltext']),$link,true,false);//SQL実行 minmax distinct 
@@ -148,7 +146,7 @@ $_SESSION['onetimekey']='key'.rand(1,10000);
 $info_table=array_shift(sql2asc("select TABLE_NAME,TABLE_COMMENT from information_schema.tables where table_schema=database() and table_name='".$_REQUEST['TABLE_NAME']."'", $link,false,false)); 
 
 if (!$info_table['TABLE_COMMENT']) $table_comment='<span style="font-style:italic;color:gray;">no table comment</span>';
-else $table_comment=htmlentities($info_table['TABLE_COMMENT'],ENT_QUOTES,$encode);
+else $table_comment=htmlentities($info_table['TABLE_COMMENT'],ENT_QUOTES,$setting['encode']);
 
 $recCount=array_shift(sql2asc("select count(1) as count from ".$_REQUEST['TABLE_NAME'], $link,false,false));
 
@@ -160,7 +158,7 @@ $tableSizeByte=array_shift(array_shift(sql2asc("select DATA_LENGTH from informat
 		</a>
 	</span>
 	<span style='font-size:x-large;'><?=$recCount['count']?></span>
-	<span id='TABLECOMMENT' realval='<?=htmlentities($info_table['TABLE_COMMENT'],ENT_QUOTES,$encode)?>' OnDblClick='tebleCommentEdit();' >
+	<span id='TABLECOMMENT' realval='<?=htmlentities($info_table['TABLE_COMMENT'],ENT_QUOTES,$setting['encode'])?>' OnDblClick='tebleCommentEdit();' >
 		<?=$table_comment ?>
 	</span>
 
@@ -220,6 +218,10 @@ $tableRow=array_shift($tableInfo);
 	foreach ($aryCols as &$row) {
 		$row['ACTION']=' &nbsp; <a safe="'.$safe.'" href="?mode=add_pk&onetimekey='.$_SESSION['onetimekey'].'&TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&COLUMN_NAME='.$row['COLUMN_NAME'].'">PK</a> ';
 		$row['ACTION'].=' &nbsp; <a safe="'.$safe.'" href="?mode=del_pk&onetimekey='.$_SESSION['onetimekey'].'&TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&COLUMN_NAME='.$row['COLUMN_NAME'].'">delPK</a> ';
+
+		$row['ACTION'].=' &nbsp; <a safe="'.$safe.'" 		
+href="MySQLCrawler.php?TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&mode1=sql&onetimekey='.$_SESSION['onetimekey'].'&sqltext='.urlencode("alter table `".$_REQUEST['TABLE_NAME']."`  ADD FOREIGN KEY (`".$row['COLUMN_NAME']."`) references TABLE01.".addslashes($row['COLUMN_NAME'])).';" >addFK</a>';
+
 		$row['ACTION'].=' &nbsp; <a safe="'.$safe.'" href="?mode=add_index&onetimekey='.$_SESSION['onetimekey'].'&TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&COLUMN_NAME='.$row['COLUMN_NAME'].'">Index</a> ';
 		$row['ACTION'].=' &nbsp; <a safe="'.$safe.'" href="?mode=add_unique&onetimekey='.$_SESSION['onetimekey'].'&TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&COLUMN_NAME='.$row['COLUMN_NAME'].'">Unique</a> ';
 		$row['ACTION'].='&nbsp; <a safe="'.$safe.'" href="?mode=drop_col&onetimekey='.$_SESSION['onetimekey'].'&TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&COLUMN_NAME='.$row['COLUMN_NAME'].'">drop</a>';
@@ -339,10 +341,10 @@ if ($tableRow['TABLE_TYPE']=='BASE TABLE'){
     $createTable=array_shift(sql2asc("show create table ".$_REQUEST['TABLE_NAME'],$link));
     echo "drop table `".$_REQUEST['TABLE_NAME']."`;<br/><br/>";
 
-    echo nl2br(preg_replace("/ /","&nbsp;&nbsp;",htmlentities($createTable['Create Table'].";",ENT_QUOTES,$encode)));
+    echo nl2br(preg_replace("/ /","&nbsp;&nbsp;",htmlentities($createTable['Create Table'].";",ENT_QUOTES,$setting['encode'])));
 }
 
-//createView
+//createView とdropviewヒョウジ
 echo "<br/><br/><strong>CREATE VIEW</strong><hr/> ";
 
 if ($tableRow['TABLE_TYPE']=='VIEW'){
@@ -350,20 +352,27 @@ if ($tableRow['TABLE_TYPE']=='VIEW'){
     $createView=array_shift(sql2asc("show create view ".$_REQUEST['TABLE_NAME'],$link));
     $cr_view=preg_replace("/(AS select)/","\n $1",$createView['Create View']);
     $cr_view=preg_replace("/( from )/","\n $1",$cr_view);
-    $cr_view=preg_replace("/,/","\n  ",$cr_view);
+    $cr_view=preg_replace("/(,)/","$1\n  ",$cr_view);
 
-    $create_view="-- drop view `".$_REQUEST['TABLE_NAME']."`; \n".
-			 preg_replace("/.*DEFINER VIEW/","-- create view ",$cr_view);
-    echo nl2br($create_view);
-
-    echo '
-    <form name="alter_view" action="MySQLCrawler.php">
-      <input type="hidden" name="mode1" value="sql">
-      <input type="hidden" name="TABLE_NAME" value="'.$_REQUEST['TABLE_NAME'].'">
-      <textarea name="sqltext" cols=50 rows=10>'.$create_view.'</textarea>
-      <input type="submit" />    
-    </form>';
+    $create_view=" drop view `".$_REQUEST['TABLE_NAME']."`; \n".
+			 preg_replace("/.*DEFINER VIEW/"," create view ",$cr_view);
+    echo nl2br($create_view)."<br/><br/>";
 }
+
+
+echo strBold("alter table statement")."<hr/>";
+echo nl2br("
+INT  ::   ALTER TABLE `a134` change `int_col` `int_col` int comment ' auto_comment '
+FLOAT::   ALTER TABLE `a134` change `float_col` `float_col` float comment ' auto_comment '
+
+VARCHAR:: ALTER TABLE `a134` change `varchar_col` `created` varchar(100) comment ' auto_comment '
+TEXT   :: ALTER TABLE `a134` change `text_col` `created` text comment ' auto_comment '
+
+DATE     :: ALTER TABLE `a134` change `date_col` `created` date comment ' auto_comment '
+DATETIME :: ALTER TABLE `a134` change `datetime_col` `created` datetime comment ' auto_comment '
+TIMESTAMP:: ALTER TABLE `a134` change `timestamp_col` `created` timestamp on update CURRENT_TIMESTAMP not null default CURRENT_TIMESTAMP comment ' timestamp 
+");
+
 //SymfonyYML
 echo "<br/><br/><strong>Symfony schema.yml</strong><hr/>";
 echo $_REQUEST['TABLE_NAME'].": #".$tableComment."<br/>";

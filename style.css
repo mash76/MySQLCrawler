@@ -1,0 +1,16 @@
+body{font-size:small;color:#2a2a2a;font-family:arial,helvetica,sans-serif;}
+
+td{font-size:small;}
+th{font-size:small; font-weight:normal;color:DarkSlateGray;}
+
+.strbold{font-size:xx-large;font-weight:bold;}
+.strHead{font-size:large;vertical-align:bottom;}
+
+a:link {color: #124488;text-decoration: none; }
+a:visited {color: #124488;text-decoration: none;}
+a:hover {color: #124488;text-decoration: underline;}
+
+input[type="text"] {font-size:medium}
+input[type="submit"] {font-size:large}
+
+.history{color:SteelBlue;font-weight:bold;}

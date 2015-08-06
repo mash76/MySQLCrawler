@@ -4,15 +4,13 @@ session_start();
 //ip認証ログインチェック
 include("ipcheck.php");
 
-//$connStr1=array('server'=>'127.0.0.1','db'=>'penguin','user'=>'root','pass'=>'horihori');
 //$_SESSION['mysql_conn_str']があること前提
 
 //スキーマ指定あれば選択
 if ($_REQUEST['TABLE_SCHEMA']) {
     $_SESSION['mysql_current_db']=$_REQUEST['TABLE_SCHEMA'];
-    $_SESSION['mysql_his_db'][$_REQUEST['TABLE_SCHEMA']]="";
+    $_SESSION['mysql_his_db'][$_REQUEST['TABLE_SCHEMA']]++;
 }
-//$connStr1=$_SESSION['mysql_conn_str'];
 $currentDB=$_SESSION['mysql_current_db'];
 
 $aryEncode=array("SJIS"=>array('mysql'=>'sjis','html'=>'shift_jis','php'=>'SJIS'),
@@ -20,13 +18,26 @@ $aryEncode=array("SJIS"=>array('mysql'=>'sjis','html'=>'shift_jis','php'=>'SJIS'
                 "EUC-JP"=>array('mysql'=>'ujis','html'=>'euc-jp','php'=>'EUCJP')
             );
 
+//接続を切り替え
+if (isset($_REQUEST['conn_no'])) {
+	unset($_SESSION['mysql_current_db']);
+	$_SESSION['conn_no']=$_REQUEST['conn_no'];
+	$_SESSION['mysql_conn_str']=$connStrAry[$_REQUEST['conn_no']];
+	$_SESSION['mysql_current_db']=$_SESSION['mysql_conn_str']['db'];
+}
+
+if (isset($_SESSION['conn_no'])) $param_conn_no="&conn_no=".$_SESSION['conn_no'];
+	
 $encode='UTF-8';
 $selectLimit=400;
 $colCharMax=200;
 
-$link = @mysql_connect($connStr1['server'],$connStr1['user'],$connStr1['pass']) ; //mysql接続
+
+$link = @mysql_connect($_SESSION['mysql_conn_str']['server'],$_SESSION['mysql_conn_str']['user'],$_SESSION['mysql_conn_str']['pass']) ; //mysql接続
+mysql_set_charset("utf8"); //mysql_real_escape_String を文字化けさせない設定
 sql2asc('use '.$currentDB,$link,false,false);//文字コード
 sql2asc('set names utf8',$link,false,false);
+
 
 if (preg_match('/export/',$_REQUEST['mode2'])) {
 
@@ -47,18 +58,33 @@ if (preg_match('/export/',$_REQUEST['mode2'])) {
 	if ($_REQUEST['mode2']=='export_tsv'){
     	echo assocToText(stripTabCrLf(sql2asc(stripslashMQuote($_REQUEST['sqltext']), $link,false,false)),"\t");
 	}
-	if ($_REQUEST['mode2']=='export_insertout') echo assocToInsert(sql2asc(stripslashMQuote($_REQUEST['sqltext']),$link,false,false),$_REQUEST['TABLE_NAME']);
+	if ($_REQUEST['mode2']=='export_insertout') {
+		$assoc=sql2asc(stripslashMQuote($_REQUEST['sqltext']),$link,false,false);
+		//noAI paramきたら AI列以外で構成
+		if ($_REQUEST["noAI"]){
+			//テーブル定義取得
+			$descTableAssoc=sql2asc('describe '.$_REQUEST['TABLE_NAME'], $link,false,false);//TableData *task
+			foreach($descTableAssoc as $row) if ($row['Extra']=="auto_increment") $aicol=$row['Field'];
+			if ($aicol){
+				foreach($assoc as &$row) unset($row[$aicol]); 
+			}
+		}
+		echo assocToInsert($assoc,$_REQUEST['TABLE_NAME']);
+    }
     exit();
 }
 header('Content-Type: text/html;charset=utf8');//ヘッダ書き換え
 
+
+
 //ワンタイムキーあれば更新SQL実行：reloadで繰り返される対策
+if (isset($_REQUEST['onetimekey']) && $_REQUEST['onetimekey']!=$_SESSION['onetimekey']) echo strRed("onetimekey fail<br/>");
 if ($_REQUEST['onetimekey']==$_SESSION['onetimekey']){
 
     if ($_REQUEST['sqltext']) echo asc2html(sql2asc($_REQUEST['sqltext'],$link,true,false))."<br/>";//SQL実行 min_max distinct 
 
     //テーブルdescでpri列を探しwhere条件に
-    $descTableAssoc=sql2asc('describe '.$_REQUEST['TABLE_NAME'], $link,true,false);//TableData *task
+    $descTableAssoc=sql2asc('describe '.$_REQUEST['TABLE_NAME'], $link,false,false);//TableData *task
     $aryPKs=null;
     foreach($descTableAssoc as $key=>$value) if ($value['Key']=='PRI') $aryPKs[$value['Field']]=$value['Field'];
 
@@ -88,8 +114,7 @@ if ($_REQUEST['onetimekey']==$_SESSION['onetimekey']){
 
 		foreach($aryPKs as $col) $max_sql[]="max(`".$col."`) as ".$col;
 		$aryMax=array_shift(sql2asc("select ".implode(",",$max_sql)." from ".$_REQUEST['TABLE_NAME'],$link));
-		var_dump($aryMax);
-		
+
 		//1000行ごとの大insert文
 		$recs=$_REQUEST['recs'];//作成行数
 		echo count($recs)." / ";
@@ -109,9 +134,7 @@ if ($_REQUEST['onetimekey']==$_SESSION['onetimekey']){
 							$vals[$row['Field']]=$aryMax[$row['Field']]+$j+1;
 						}else{
 							//数値以外
-							if (preg_match ('/(date|time)/i'       ,$row['Type'])) $valGenerate=date("'Y-m-d H:i:s'",time()+(rand(1,2000)-1000)*86400);//現在から少し揺らす
-							
-							
+							if (preg_match ('/(date|time)/i'       ,$row['Type'])) $valGenerate=date("'Y-m-d H:i:s'",time()+(rand(1,2000)-1000)*86400);//現在から少し揺らす		
 						}
 					}
 				}else{
@@ -171,59 +194,102 @@ DOC_END;
 				}
 			}
 			foreach($sqlVals as &$value) $value="'".$value."'";
-			echoGray($sqlInsert.join(",",$sqlKeys).") values (".join(",",$sqlVals).");"."<br/>");
-			}
-		}
-	
-		//importTSVCSV upd 
-		if ($_REQUEST['mode2']=='importtsvcsv_upd'){
-			//文字コード判別 $str格納時のコードは、このphpファイルの保存文字コード
-			$aryText=trimArray(explode("\n",$_REQUEST['text']));
-			
-			$count=0;
-			$max=count($aryText);
-			$descTableAssoc=sql2asc("describe ".$_REQUEST['TABLE_NAME'], $link,false,false);//pk取得
-			foreach ($aryText as $row){
-				if (trim($row)=='') continue;
-				if ($_REQUEST['updtype']=='CSV')    $separateChar=',';
-				else                                $separateChar="\t";
-	
-				//列取得、スルー列を除去
-				$cols=array();
-				foreach ($descTableAssoc as $field){
-					if (!$_REQUEST['thru'][$field['Field']]) $cols[]=$field['Field'];
-				}
-				$strCols="(`".implode("`,`",$cols)."`)";
-				$strVals[]=" ('".join("','",explode($separateChar,$row))."') ";//$rowをtrimしたらtsvで最後空白のとき空白を取得できない
-				//smallsqlがあれば毎回insert、なければ1000行ごと
-				$count++;
-				if ($_REQUEST['smallsql'] or $count % 3000==0 or $count==$max){
-					$sqlInsert="insert into ".$_REQUEST['TABLE_NAME']." ".$strCols." values ".implode(",",$strVals).";";
-					sql2asc($sqlInsert,$link);
-					$strVals=array();
-				}
-			}
-			var_dump(implode(",",$strVals));
+			echo strGray($sqlInsert.join(",",$sqlKeys).") values (".join(",",$sqlVals).");"."<br/>");
 		}
 	}
+	
+	//importTSVCSV upd 
+	if ($_REQUEST['mode2']=='importtsvcsv_upd'){
+		//文字コード判別 $str格納時のコードは、このphpファイルの保存文字コード
+		$text=stripslashMQuote($_REQUEST['text']);
+		$aryText=trimArray(explode("\n",$text));//配列の空白項目除去
+		//cho "text=".$_REQUEST['text']."<br/>";			
+		//echo "text=".$text."<br/>";
+		
+		$count=0;
+		$success=0;
+		$errors=0;
+		$max=count($aryText);
+		$descTableAssoc=sql2asc("describe ".$_REQUEST['TABLE_NAME'], $link,false,false);//pk取得
+		$sql_set_ct=3000;
+		if ($_REQUEST['smallsql']==1) $sql_set_ct=1;
+		
+		foreach ($aryText as $row_str){
+			if (trim($row_str)=='') continue;//空白行ならスルー
+			if ($_REQUEST['updtype']=='CSV')    $separateChar=',';
+			else                                $separateChar="\t";
 
-	//ワンタイムキーをセット
-	$_SESSION['onetimekey']='key'.rand(1,10000);
+			//列取得、スルー列を除去
+			$cols=array();
+			//スルー対象でない列の値を取得
+			foreach ($descTableAssoc as $field){
+				if (!$_REQUEST['thru'][$field['Field']]) {
+					$cols[]=$field['Field'];
+				}
+			}
+			$strCols="(`".implode("`,`",$cols)."`)";
+			//値
+			$col_vals=explode($separateChar,$row_str);
+			foreach($col_vals as &$val) {
+				$val=trim($val);
+				if ($_REQUEST["double_quote"]) $val=trim($val,'"');//通常除去＋ダブルクオートも
+				$val=mysql_real_escape_string($val);
+			}
 
+			
+
+
+			$strVals[]=" ('".join("','",$col_vals)."') ";//$rowをtrimせず。tsvで最後空白のとき空白を取得できないから
+			//smallsqlがあれば毎回insert、なければ3000行ごと	
+			$count++;
+			if ( $count % $sql_set_ct==0 or $count==$max){
+				$sqlInsert="insert into ".$_REQUEST['TABLE_NAME']." ".$strCols." values ".implode(",",$strVals).";";
+				$ret=sql2asc($sqlInsert,$link);	
+				
+				$sqls++;
+				if ($ret==false) $errors++;
+				else 			 $success++;
+				
+				$strVals=array();
+			}
+		}
+		echo "target column count ".count($cols)."<br/>";
+		echo "send column count (last line) ".count($col_vals)."<br/>";
+
+		echo "send lines ".$max."<br/>";
+		echo "lines per sql ".$sql_set_ct."<br/>";
+		echo "created sqls ".$sqls."<br/>";
+		echo strGray(" success ").strBold($success);
+		echo strGray(" <br/>fail:").strRed($errors)." <br/>";
+	}
+}
+
+
+//ワンタイムキーをセット
+$_SESSION['onetimekey']='key'.rand(1,10000);
+if ($_REQUEST['schlink_clear']) unset($_SESSION['searchvals'][$_REQUEST['TABLE_NAME']]);
+//検索履歴
+if ($_REQUEST['searchvals']) $_SESSION['searchvals'][$_REQUEST['TABLE_NAME']][]=serialize($_REQUEST['searchvals']);	
+if (!$_SESSION['searchvals'][$_REQUEST['TABLE_NAME']]) $_SESSION['searchvals'][$_REQUEST['TABLE_NAME']]=array();
 ?>
-<html>
-<head><title><?=$_REQUEST['TABLE_NAME']?>:<?=$_SESSION['mysql_current_db']?></title>
-<meta http-equiv="Content-Type" content="text/html; charset=shift_jis">
-<link href="style.css" rel="stylesheet" type="text/css" />
-<script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4/jquery.min.js"></script> 
-</head>
+<? htmlHeader($_REQUEST['TABLE_NAME'].":".$_SESSION['mysql_current_db'],$setting['encode']);?>
 <body>
-←<a href="MySQLCrawler.php"><?=$connStr1['server']; ?> <? echodarkred($currentDB); ?></a><hr/>
+←<a href="MySQLCrawler.php?mode=<?=$param_conn_no?>"><?=$_SESSION['mysql_conn_str']['server']; ?> <?=strDarkRed($currentDB); ?></a><br/>
 <?
-if ($_REQUEST['TABLE_NAME']) $_SESSION['mysql_his_table'][$_REQUEST['TABLE_NAME']]='';
+$ct=0;
+foreach($_SESSION['searchvals'][$_REQUEST['TABLE_NAME']] as $key=>$searchvals_serial){
+	$ct++;
+	echo '<a href="?TABLE_NAME='.$_REQUEST['TABLE_NAME'].$param_conn_no.'&schlink='.$key.'"><span class="history" >filter'.$ct.'</span></a> ';
+}
+if ($_SESSION['searchvals'][$_REQUEST['TABLE_NAME']]) echo '<a style="font-style:italic;color:gray;" href="?TABLE_NAME='.$_REQUEST['TABLE_NAME'].'&schlink_clear=clear">clear</a>';
+?>
+
+<hr/>
+<?
+if ($_REQUEST['table_history']) $_SESSION['mysql_his_table'][$_REQUEST['TABLE_NAME']]++;
 
 $descTableAssoc=sql2asc("describe ".$_REQUEST['TABLE_NAME'], $link,false,false);//pk取得
-foreach($descTableAssoc as $key=>$row){    if ($row['Key']=='PRI') $pk=$row['Field'];}
+foreach($descTableAssoc as $key=>$row){    if ($row['Key']=='PRI') $pk[]=$row['Field'];}
 
 //リンク表示用：テーブルコピー文生成
 $newTable=$_REQUEST['TABLE_NAME'].date("_Ymd_His");
@@ -240,34 +306,43 @@ $recCount=array_shift(sql2asc("select count(1) as count from ".$_REQUEST['TABLE_
 if (!$info_tables['TABLE_COMMENT']) $table_comment='<span style="font-style:italic;color:gray;">no table comment</span>';
 else                                $table_comment=htmlentities($info_tables['TABLE_COMMENT'],ENT_QUOTES,$encode);
 
+	//検索 フォームに入れた場合と、そのショートカットから来た場合
+	if (isset($_REQUEST['schlink'])) $searchvals=unserialize($_SESSION['searchvals'][$_REQUEST['TABLE_NAME']][$_REQUEST['schlink']]);
+	if ($_REQUEST['searchvals']) $searchvals=$_REQUEST['searchvals'];
+	$andor=$_REQUEST['andor'];
+	$andor=" or ";
+	
+
 //DATA一覧
-if ($_REQUEST['mode2']=='data' or !isset($_REQUEST['mode2']) or !isset($_REQUEST['mode1'])){
+if ($_REQUEST['mode2']=='data' or !isset($_REQUEST['mode2'])){
 
-//検索条件の画面入力あれば where文作成 %あれば likeに $$あれば<>に ,あればinに
-$sqlWhere="";
-$arySQLWhere=array();
-$filterCount=$recCount['count'];
-
-if (isset($_REQUEST['searchvals'])){
-	foreach($_REQUEST['searchvals'] as $key => $value)    {//配列でaaa=bbをつくりandでexplodeし、結合
-		$valueEscaped=mysqlEsacpeMQuote($value);
-
-		if ($value!="") {
-			if (strpos($value,"%")!==false) $arySQLWhere[$key]=$_REQUEST['TABLE_NAME'].".`".$key."` like '".$valueEscaped."'";
-			elseif(strpos($value,"$$")!==false) $arySQLWhere[$key]= str_replace("$$",$_REQUEST['TABLE_NAME'].".`".$key."`",$valueEscaped);
-			elseif(strpos($value,",")!==false) $arySQLWhere[$key]=$_REQUEST['TABLE_NAME'].".`".$key."` in (".$valueEscaped.")";
-			elseif(strpos($value,"-")!==false) {
-				list($w_from,$w_to)=explode("-",$valueEscaped);
-				$arySQLWhere[$key]=$_REQUEST['TABLE_NAME'].".`".$key."` between '".$w_from."' and '".$w_to."'";
-			}else{
-				$arySQLWhere[$key]=$key." = '".$valueEscaped."'";
+	//検索条件の画面入力あれば where文作成 %あれば likeに $$あれば<>に ,あればinに
+	$sqlWhere="";
+	$arySQLWhere=array();
+	$filterCount=$recCount['count'];
+	
+	if (isset($searchvals)){
+		foreach($searchvals as $key => $value)    {//配列でaaa=bbをつくりandでexplodeし、結合
+			$valueEscaped=mysqlEsacpeMQuote($value);
+	
+			if ($value!="") {
+				if (strpos($value,"%")!==false) $arySQLWhere[$key]=$_REQUEST['TABLE_NAME'].".`".$key."` like '".$valueEscaped."'";
+				elseif(strpos($value,"'")!==false) $arySQLWhere[$key]= $_REQUEST['TABLE_NAME'].".`".$key."` =".trim($value);
+				elseif(strpos($value,"$$")!==false) $arySQLWhere[$key]= str_replace("$$",$_REQUEST['TABLE_NAME'].".`".$key."`",$valueEscaped);
+				elseif(strpos($value,",")!==false) $arySQLWhere[$key]=$_REQUEST['TABLE_NAME'].".`".$key."` in (".$valueEscaped.")";
+				elseif(strpos($value,"-")!==false) {
+					list($w_from,$w_to)=explode("-",$valueEscaped);
+					$arySQLWhere[$key]=$_REQUEST['TABLE_NAME'].".`".$key."` between '".$w_from."' and '".$w_to."'";
+				}else{
+					$arySQLWhere[$key]=$key." = '".$valueEscaped."'";
+				}
 			}
-		}
-		$sqlWhere=implode(" ".$_REQUEST['andor']." ",$arySQLWhere);
-		if (strlen($sqlWhere)!=0) $sqlWhere=" where ".$sqlWhere;
+			$sqlWhere=implode(" ".$andor." ",$arySQLWhere);
+			if (strlen($sqlWhere)!=0) $sqlWhere=" where ".$sqlWhere;
 		}
 	}
-	
+
+
 	//選択範囲内でいろいろdistinct mixmax,asc,desc   param=distinct_col
 	if ($_REQUEST['distinct_col']){
 		echo asc2html(sql2asc("select ".$_REQUEST['distinct_col'].",count(1) from ".$_REQUEST['TABLE_NAME']." group by ".$_REQUEST['distinct_col'] ,$link));
@@ -283,17 +358,18 @@ if (isset($_REQUEST['searchvals'])){
 	}
 	//リンク
 	$sqlSelect="select * from ".$_REQUEST['TABLE_NAME'].$sqlWhere;
-
+	
+	$sqlNoLimit=$sqlSelect;
 	if ($_REQUEST['nolimit']!='true') $sqlSelect.=" limit $selectLimit";//limitないと数万件で待たされる
-	$tableData=sql2asc($sqlSelect, $link,true,false);
-	echo "SQL画面に持ってく<br/>";
+	
+	$tableData=sql2asc($sqlSelect, $link,false,false);//検索実行
 	$filterCount=count($tableData);
 }
 
 ?>
 <span style='font-size:x-large;'>
         <span style='font-weight:bold;'>
-        <a href="MySQL_TableEdit.php?TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>">
+        <a href="MySQL_TableEdit.php?TABLE_NAME=<?=$_REQUEST['TABLE_NAME'].$param_conn_no?>">
             <?=$_REQUEST['TABLE_NAME']?>
         </a>
     </span>
@@ -302,14 +378,14 @@ if (isset($_REQUEST['searchvals'])){
 </span>
 <span id='TABLECOMMENT' realval='<?=htmlentities($info_tables['TABLE_COMMENT'],ENT_QUOTES,$encode)?>' OnDblClick='tebleCommentEdit();' >
     <?=$table_comment ?></span>
-<br/>
 
-<a href="MySQLCrawler.php?mode1=sql&dbname=<?=$connStr1['db']?>&sqltext=<?=$sqlTableCopy?>">BKCopy</a>&nbsp;
-<a href="?mode2=importtsvcsv&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>">ImportTSVCSV</a>&nbsp;
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+<a href="MySQLCrawler.php?mode1=sql<?=$param_conn_no?>&dbname=<?=$_SESSION['mysql_conn_str']['db']?>&sqltext=<?=$sqlTableCopy?>">BKCopy</a>&nbsp;
+<a href="?mode2=importtsvcsv<?=$param_conn_no?>&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>">ImportTSVCSV</a>&nbsp;
 
 Generate 
 <? foreach (array(1,5,50,100,1000,10000,100000) as $recs) { ?>
-	<a safe="<?=$safe?>" href="?mode2=create1000&onetimekey=<?=$_SESSION['onetimekey']?>&recs=<?=$recs?>&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>"><?=$recs?></a>&nbsp;   
+	<a safe="<?=$setting['safe']?>" href="?mode2=create1000<?=$param_conn_no?>&onetimekey=<?=$_SESSION['onetimekey']?>&recs=<?=$recs?>&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>"><?=$recs?></a>&nbsp;   
 <? } ?>
 
 <a href="MySQLCrawler.php?mode1=sql&sqltext=<?=urlencode('-- truncate table `'.$_REQUEST['TABLE_NAME']."`") ?>" target='_blank'>#Truncate</a>&nbsp;&nbsp;
@@ -345,8 +421,11 @@ if ($_REQUEST['mode2']=='importtsvcsv' or $_REQUEST['mode2']=='importtsvcsv_upd'
     <input type=hidden name='TABLE_NAME' value='<?=$_REQUEST['TABLE_NAME']?>'> 
 	<input type=hidden name='onetimekey' value='<?=$_SESSION['onetimekey']?>'> 
 	<?
-    echo "<br/>upload TSV CSV<br/><br/>";
+    echo strHTML("upload TSV CSV ","150% bold span");
+	echo strGray("max_post_size=".ini_get("post_max_size"))."<br/>";
+	
     $descTableAssoc=sql2asc("describe ".$_REQUEST['TABLE_NAME'], $link,false,false);//pk取得
+	echo strBold(count($descTableAssoc))." columns<br/>"; 
 
     print "<table><tr name='header'>";
     foreach($descTableAssoc as $key=>$row){
@@ -370,25 +449,40 @@ if ($_REQUEST['mode2']=='importtsvcsv' or $_REQUEST['mode2']=='importtsvcsv_upd'
 		
 		<input type=submit name='updtype' value='CSV'> 
 		<input type=submit name='updtype' value='TSV'> 
-		<input type=checkbox name='smallsql' value='1' ".($_REQUEST['smallsql'] ? "checked" : "")." />SmallSQL
+		<input type=checkbox name='double_quote' value='1' <?=$_REQUEST['double_quote'] ? "checked" : "" ?> />"abcde"
+		<input type=checkbox name='smallsql' value='1' <?=$_REQUEST['smallsql'] ? "checked" : "" ?> />SmallSQL
 		<br/>
 	</form>
 <?
 }
 
 if (isset($tableData)) {
-	?>
-		<?=strBold(count($tableData)).strGray("Rows");?> <?=strGray("Export")?> <a href="?mode2=export_csv&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>CSV</a> 
-		<a href="?mode2=export_tsv&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>TSV</a> 
-		<a href="?mode2=export_insertout&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>InsertStmt</a> 
-		
-		Edit 
-		<? 
+
+		echo strGray($sqlSelect).' <a href="MySQLCrawler.php?mode1=sql&sqltext='.urlencode($sqlSelect).'">#Select</a> ';
 		//update文
 		foreach($descTableAssoc as $col) $upd_1[]="\n`".$col["Field"]."`='VAL_".$col["Field"]."'";
 		echo "<a href='MySQLCrawler.php?mode1=sql&sqltext=".
-		urlencode('update '.$_REQUEST['TABLE_NAME']." set ".implode(",",$upd_1)." \n".trim($sqlWhere))."' target='_blank'>Update</a> ";
+		urlencode('-- update '.$_REQUEST['TABLE_NAME']." set ".implode(",",$upd_1)." \n".trim($sqlWhere))."' target='_blank'>#Update</a> ";
 		echo"<a href='MySQLCrawler.php?mode1=sql&sqltext=".urlencode('-- delete from `'.$_REQUEST['TABLE_NAME']."`".$sqlWhere)."' target='_blank'>#Delete</a>";
+		
+		echo " >> ";
+	?>
+
+		<?=strBold(count($tableData)).strGray("Rows");?> 
+		<?=strGray("Export")?> 
+			
+		<a href="?mode2=export_csv&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>CSV</a> 
+		<a href="?mode2=export_tsv&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>TSV</a> 
+
+		<a href="?mode2=export_csv&sqltext=<?=urlencode($sqlNoLimit)?>" target='_blank'>CSVAll</a> 
+		<a href="?mode2=export_tsv&sqltext=<?=urlencode($sqlNoLimit)?>" target='_blank'>TSVAll</a> 
+
+		<a href="?mode2=export_insertout&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>InsertStmt</a>
+				<a href="?mode2=export_insertout&noAI=true&TABLE_NAME=<?=$_REQUEST['TABLE_NAME']?>&sqltext=<?=urlencode($sqlSelect)?>" target='_blank'>(noAIcol)</a>  
+		
+		Edit 
+		<? 
+
 		//trim作る
 		foreach ($tableData[0] as $colname=>$colval) $upd[]="`".$colname."`=trim('**val**' from `".$colname."`)";
 		$upd_str="update ".$_REQUEST['TABLE_NAME']." set ".implode(",",$upd).";";
@@ -402,9 +496,16 @@ if (isset($tableData)) {
 			"\n -- ".preg_replace("/".preg_quote("**val**")."/","\\t",$upd_str).
 			"").
 			"' target='_blank'>TrimTabCTRL</a>";
-
-	 foreach ($tableData as &$row) $row['ACTION']='<a safe="'.$safe.'" href="javascript:document.frmTblSch.sqltext.value='."'delete from `".$_REQUEST['TABLE_NAME']."` where `".$pk."`=".$row[$pk]."';document.frmTblSch.submit();".'">Del</a>';
-	echo asc2htmlSearch($tableData,"ONE_TABLE_DATA");//TableData
+	
+	foreach ($tableData as &$row) {
+		$where_pks=array();
+		foreach ($pk as $pk_colname) $where_pks[]="`".$pk_colname."` =\'".$row[$pk_colname]."\' ";
+	 	$row['ACTION']='<a safe="'.$setting['safe'].'" href="javascript:document.frmTblSch.sqltext.value='."'delete from `".$_REQUEST['TABLE_NAME']."` ".
+	 					"where ".implode(" and ",$where_pks)."';document.frmTblSch.submit();".'">Del</a>';
+		
+ 	}
+	
+	echo asc2htmlSearch($tableData,$searchvals,"ONE_TABLE_DATA");//TableData
 }
 mysql_close($link) or die("切断失敗");//db切断
 ?>
@@ -479,7 +580,7 @@ function encodeHTML(s) {
  
 <?php //functions
 
-function asc2htmlSearch($assoc,$htmlIdTag=null,$htmlEnc=true){ //クエリ結果連想配列
+function asc2htmlSearch($assoc,$searchvals,$htmlIdTag=null,$htmlEnc=true,$isTrim=false){ //クエリ結果連想配列
 
 	ob_start();
     global $link,$colCharMax;
@@ -512,7 +613,7 @@ function asc2htmlSearch($assoc,$htmlIdTag=null,$htmlEnc=true){ //クエリ結果
         <br/>
     <table id='<?=$htmlIdTag?>'><tr id='header' name='header'>
     
-    AllColSearch<input type='text' name='allSearch' id='allSearch' value='' >
+    <input type='text' name='allSearch' id='allSearch' placeholder="filterAllCols" size="12" value='' >
 
     <script type="text/javascript">
         //全列サーチ
@@ -568,9 +669,11 @@ function asc2htmlSearch($assoc,$htmlIdTag=null,$htmlEnc=true){ //クエリ結果
         if ($value['Key']=='PRI')  $colKey=strRed("PRI ");
         if ($value['Key']=='MUL')  $colKey="<span style='color:goldenrod;'>MUL </span>";
 
-        $strNull='NotNull';
+        $strNull='';
         if ($value['Null']=='YES') $strNull='Null';
-        echo $colKey.strGray($strNull."<br/>".$aryCols[$key]['Type']."<br/>");
+        $extra="";
+        if ($value["Extra"]) $extra=$value["Extra"];
+        echo $colKey." ".$extra."<br/>".strGray($aryCols[$key]['Type']."<br/>".$strNull."<br/>");
 
         //dist MM desc asc
         $TABLE_NAME="";
@@ -579,19 +682,24 @@ function asc2htmlSearch($assoc,$htmlIdTag=null,$htmlEnc=true){ //クエリ結果
 		 
         <a title='distinct' href='javascript:document.frmTblSch.distinct_col.value="<?=$key?>";document.frmTblSch.submit();' target='_blank'>dist</a>&nbsp;
         <a title='minmax' href='javascript:document.frmTblSch.minmax_col.value="<?=$key?>";document.frmTblSch.submit();' target='_blank'>MM</a>&nbsp;
+        
+        <?
+        $desc="desc";
+        $asc="asc";
+        if ($_REQUEST["sortcolumn"]==$key and $_REQUEST["sortorder"]=="asc") $asc=strHTML($asc,"bold crimson span");
+        if ($_REQUEST["sortcolumn"]==$key and $_REQUEST["sortorder"]=="desc") $desc=strHTML($desc,"bold crimson span");        
+        ?>
         <a href='#' title='order by desc' onClick='document.frmTblSch.sortcolumn.value="<?=$key?>"
-            document.frmTblSch.sortorder.value="desc"; document.frmTblSch.submit();'>desc</a>&nbsp;
+            document.frmTblSch.sortorder.value="desc"; document.frmTblSch.submit();'><?=$desc?></a>&nbsp;
         <a href='#' title='order by asc' onClick='document.frmTblSch.sortcolumn.value="<?=$key?>";
-            document.frmTblSch.sortorder.value="asc"; document.frmTblSch.submit();'>asc</a>
+            document.frmTblSch.sortorder.value="asc"; document.frmTblSch.submit();'><?=$asc?></a>
         &nbsp;&nbsp;<br/>
         <?
         //検索ワード
-        $searchvals=array();
-        if (isset($_REQUEST['searchvals'])) {
-            $searchvals=$_REQUEST['searchvals'];
-            echo "<input type=text name='searchvals[${key}]' value='".htmlentities(stripslashMQuote($searchvals[$key]),ENT_QUOTES,'UTF-8')."'>";//検索欄
+        if ($searchvals) {
+            echo "<input type=text name='searchvals[${key}]' placeholder='filter' value='".htmlentities(stripslashMQuote($searchvals[$key]),ENT_QUOTES,'UTF-8')."'>";//検索欄
         }else{
-            echo "<input type=text name='searchvals[${key}]' value=''>";//検索欄
+            echo "<input type=text name='searchvals[${key}]' placeholder='filter' value=''>";//検索欄
         }
         echo "&nbsp;</td>\n";
     }
@@ -608,11 +716,13 @@ function asc2htmlSearch($assoc,$htmlIdTag=null,$htmlEnc=true){ //クエリ結果
                 }else{
                     if ($htmlEnc) $nullAttr="isnull=false";
                     //長い文字省略 文字数計測 > HTMLエンコード > 省略通知html追加
-                    $mbchar_count=mb_strlen($value,'UTF-8');
-                    $char_count=strlen($value);
-                    if ($mbchar_count>$colCharMax) $value=mb_substr($value,0,50,'UTF-8');
-                    if ($key!="ACTION") $value=htmlentities($value,ENT_COMPAT,'utf-8');
-                    if ($mbchar_count>$colCharMax) $value.="...".strRed($mbchar_count." char ".$char_count."byte");
+                    if ($isTrim){
+                    	$mbchar_count=mb_strlen($value,'UTF-8');
+                    	$char_count=strlen($value);
+                    	if ($mbchar_count>$colCharMax) $value=mb_substr($value,0,50,'UTF-8');
+                    	if ($mbchar_count>$colCharMax) $value.="...".strRed($mbchar_count." char ".$char_count."byte");
+					}
+                   	if ($key!="ACTION") $value=htmlentities($value,ENT_COMPAT,'utf-8');
                 }
 
                 $tdValue=$value;
@@ -629,5 +739,10 @@ function asc2htmlSearch($assoc,$htmlIdTag=null,$htmlEnc=true){ //クエリ結果
     return $return;
 }
 
-echo "<pre>".print_r($_REQUEST,true)."</pre>";
+echo '$_REQUEST<br/>'."<pre>".print_r($_REQUEST,true)."</pre>";
+echo '$_SESSION<br/>'."<pre>".print_r($_SESSION,true)."</pre>";
+
+echo strBold('RAW_POST<br/>');
+echo file_get_contents("php://input");
+
 ?>
